@@ -231,6 +231,16 @@ func TestWriteBasic(t *testing.T) {
 				t.Logf(`%+v != args.packet.Interfaces (got %+v)`, test.ifs, typs)
 				t.Fail()
 			}
+			for _, k := range []string{xlog.KeyMessage, xlog.KeyTime, xlog.KeyLevel, xlog.KeyFile} {
+				if _, ok := args.packet.Extra[k]; ok {
+					t.Logf(`key %+v exists in args.packet.Extra`, k)
+					t.Fail()
+				}
+				if _, ok := test.in[k]; !ok {
+					t.Logf(`key %+v does not exist in fields`, k)
+					t.Fail()
+				}
+			}
 		})
 	}
 }

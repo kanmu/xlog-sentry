@@ -112,8 +112,17 @@ func getAndDelRequest(fields map[string]interface{}, key string) (*http.Request,
 	return req, true
 }
 
+func cloneFields(src map[string]interface{}) map[string]interface{} {
+	retval := make(map[string]interface{})
+	for k, v := range src {
+		retval[k] = v
+	}
+	return retval
+}
+
 // Write implements xlog.Output interface
 func (o Output) Write(fields map[string]interface{}) error {
+	fields = cloneFields(fields)
 	level := xlogSeverityMap[fields[xlog.KeyLevel].(string)]
 
 	if level < o.Level {
