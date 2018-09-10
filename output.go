@@ -31,6 +31,7 @@ var (
 type Output struct {
 	Timeout                 time.Duration
 	StacktraceConfiguration StackTraceConfiguration
+	Level                   xlog.Level
 
 	client                  *raven.Client
 	host                    string
@@ -52,7 +53,6 @@ type StackTraceConfiguration struct {
 	InAppPrefixes []string
 }
 
-
 func NewSentryOutput(DSN string, tags map[string]string) *Output {
 	client, _ := raven.NewClient(DSN, tags)
 	return newOutput(client)
@@ -73,6 +73,7 @@ func newOutput(client *raven.Client) *Output {
 			Context:       0,
 			InAppPrefixes: nil,
 		},
+		Level: xlog.LevelError,
 		client: client,
 		host: hostname,
 	}
@@ -115,17 +116,19 @@ func getAndDelRequest(fields map[string]interface{}, key string) (*http.Request,
 func (o Output) Write(fields map[string]interface{}) error {
 	level := xlogSeverityMap[fields[xlog.KeyLevel].(string)]
 
+	if level < o.Level {
+		return nil
+	}
+
 	packet := raven.NewPacket(fields[xlog.KeyMessage].(string))
 	packet.Timestamp = raven.Timestamp(fields[xlog.KeyTime].(time.Time))
 	packet.Level = severityMap[level]
 	packet.Logger = "xlog"
 
-
 	delete(fields, xlog.KeyMessage)
 	delete(fields, xlog.KeyTime)
 	delete(fields, xlog.KeyLevel)
 	delete(fields, xlog.KeyFile)
-
 
 	if serverName, ok := getAndDel(fields, "host"); ok {
 		packet.ServerName = serverName
