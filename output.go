@@ -2,10 +2,10 @@ package xlogsentry
 
 import (
 	"fmt"
-	"time"
 	"net/http"
-	"runtime"
 	"os"
+	"runtime"
+	"time"
 
 	"github.com/getsentry/raven-go"
 	"github.com/rs/xlog"
@@ -33,20 +33,20 @@ type Output struct {
 	StacktraceConfiguration StackTraceConfiguration
 	Level                   xlog.Level
 
-	client                  *raven.Client
-	host                    string
+	client *raven.Client
+	host   string
 }
 
 // StackTraceConfiguration allows for configuring stacktraces
 type StackTraceConfiguration struct {
 	// whether stacktraces should be enabled
-	Enable        bool
+	Enable bool
 	// the level at which to start capturing stacktraces
-	Level         xlog.Level
+	Level xlog.Level
 	// how many stack frames to skip before stacktrace starts recording
-	Skip          int
+	Skip int
 	// the number of lines to include around a stack frame for context
-	Context       int
+	Context int
 	// the prefixes that will be matched against the stack frame.
 	// if the stack frame's package matches one of these prefixes
 	// sentry will identify the stack frame as "in_app"
@@ -73,15 +73,15 @@ func newOutput(client *raven.Client) *Output {
 			Context:       0,
 			InAppPrefixes: nil,
 		},
-		Level: xlog.LevelError,
+		Level:  xlog.LevelError,
 		client: client,
-		host: hostname,
+		host:   hostname,
 	}
 }
 
 func getAndDel(fields map[string]interface{}, key string) (string, bool) {
 	var (
-		ok bool
+		ok  bool
 		v   interface{}
 		val string
 	)
@@ -98,7 +98,7 @@ func getAndDel(fields map[string]interface{}, key string) (string, bool) {
 
 func getAndDelRequest(fields map[string]interface{}, key string) (*http.Request, bool) {
 	var (
-		ok bool
+		ok  bool
 		v   interface{}
 		req *http.Request
 	)
