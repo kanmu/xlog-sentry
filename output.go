@@ -1,13 +1,13 @@
 package xlogsentry
 
 import (
-	"fmt"
 	"net/http"
 	"os"
 	"runtime"
 	"time"
 
 	"github.com/getsentry/raven-go"
+	"github.com/getsentry/sentry-go"
 	"github.com/rs/xlog"
 )
 
@@ -19,11 +19,11 @@ var (
 		"error": xlog.LevelError,
 	}
 
-	severityMap = map[xlog.Level]raven.Severity{
-		xlog.LevelDebug: raven.DEBUG,
-		xlog.LevelInfo:  raven.INFO,
-		xlog.LevelWarn:  raven.WARNING,
-		xlog.LevelError: raven.ERROR,
+	severityMap = map[xlog.Level]sentry.Level{
+		xlog.LevelDebug: sentry.LevelDebug,
+		xlog.LevelInfo:  sentry.LevelInfo,
+		xlog.LevelWarn:  sentry.LevelWarning,
+		xlog.LevelError: sentry.LevelError,
 	}
 )
 
@@ -33,7 +33,7 @@ type Output struct {
 	StacktraceConfiguration StackTraceConfiguration
 	Level                   xlog.Level
 
-	client *raven.Client
+	client *sentry.Client
 	host   string
 }
 
@@ -54,15 +54,37 @@ type StackTraceConfiguration struct {
 }
 
 func NewSentryOutput(DSN string, tags map[string]string) *Output {
-	client, _ := raven.NewClient(DSN, tags)
+	//client, _ := sentry.NewClient(DSN, tags)
+	client, _ := sentry.NewClient(sentry.ClientOptions{
+		Dsn:              DSN,
+		Debug:            false,
+		AttachStacktrace: true,
+		SampleRate:       0,
+		IgnoreErrors:     nil,
+		BeforeSend:       nil,
+		BeforeBreadcrumb: nil,
+		Integrations:     nil,
+		DebugWriter:      nil,
+		Transport:        nil,
+		ServerName:       "",
+		Release:          "",
+		Dist:             "",
+		Environment:      "",
+		MaxBreadcrumbs:   0,
+		HTTPClient:       nil,
+		HTTPTransport:    nil,
+		HTTPProxy:        "",
+		HTTPSProxy:       "",
+		CaCerts:          nil,
+	})
 	return newOutput(client)
 }
 
-func NewSentryOutputWithClient(client *raven.Client) *Output {
+func NewSentryOutputWithClient(client *sentry.Client) *Output {
 	return newOutput(client)
 }
 
-func newOutput(client *raven.Client) *Output {
+func newOutput(client *sentry.Client) *Output {
 	hostname, _ := os.Hostname()
 	return &Output{
 		Timeout: 300 * time.Millisecond,
@@ -73,7 +95,6 @@ func newOutput(client *raven.Client) *Output {
 			Context:       0,
 			InAppPrefixes: nil,
 		},
-		Level:  xlog.LevelError,
 		client: client,
 		host:   hostname,
 	}
@@ -130,9 +151,17 @@ func (o Output) Write(fields map[string]interface{}) error {
 	}
 
 	packet := raven.NewPacket(fields[xlog.KeyMessage].(string))
-	packet.Timestamp = raven.Timestamp(fields[xlog.KeyTime].(time.Time))
-	packet.Level = severityMap[level]
-	packet.Logger = "xlog"
+
+	// In past, when xlog-sentry depends on raven-go (old SDK), raven.Packet struct was used here,
+	// but sentry-go (new SDK) no longer provides Packet struct.
+	//
+	// According to the migration guide of Go SDK, sentry.Event struct should be used instead of raven.Packet.
+	// https://docs.sentry.io/platforms/go/migration/#capturing-events
+	event := sentry.NewEvent()
+	event.Message = fields[xlog.KeyMessage].(string)
+	event.Timestamp = fields[xlog.KeyTime].(time.Time)
+	event.Level = severityMap[level]
+	event.Logger = "xlog"
 
 	delete(fields, xlog.KeyMessage)
 	delete(fields, xlog.KeyTime)
@@ -140,22 +169,38 @@ func (o Output) Write(fields map[string]interface{}) error {
 	delete(fields, xlog.KeyFile)
 
 	if serverName, ok := getAndDel(fields, "host"); ok {
-		packet.ServerName = serverName
+		event.ServerName = serverName
 	} else if serverName, ok := getAndDel(fields, "server_name"); ok {
-		packet.ServerName = serverName
+		event.ServerName = serverName
 	} else {
-		packet.ServerName = o.host
+		event.ServerName = o.host
 	}
 	if release, ok := getAndDel(fields, "release"); ok {
-		packet.Release = release
+		event.Release = release
 	}
 	if culprit, ok := getAndDel(fields, "culprit"); ok {
-		packet.Culprit = culprit
+		// In past, when xlog-sentry depends on raven-go, "culprit" data was assigned to `packet.Culprit`:
+		//
+		//   packet.Culprit = culprit
+		//
+		// Nowadays, "culprit" is deprecated, and sentry-go's sentry.Event struct doesn't expose `Culprit` field anymore.
+		// https://forum.sentry.io/t/culprit-deprecated-in-favor-of-what/4871
+		//
+		// According to the following discussion comment, `Transaction` field should be used instead of `Culprit`.
+		// https://forum.sentry.io/t/culprit-deprecated-in-favor-of-what/4871/6
+		event.Transaction = culprit
 	} else if role, ok := getAndDel(fields, "role"); ok {
-		packet.Culprit = role
+		// ditto
+		event.Transaction = role
 	}
 	if req, ok := getAndDelRequest(fields, "http_request"); ok {
-		packet.Interfaces = append(packet.Interfaces, raven.NewHttp(req))
+		// In past, when xlog-sentry depends on raven-go, "http_request" data was assigned to `packet.Interfaces`:
+		//
+		//   packet.Interfaces = append(packet.Interfaces, raven.NewHttp(req))
+		//
+		// Nowadays, sentry-go's sentry.Event struct doesn't expose `Interfaces` field anymore, but exposes `Request` field.
+		// Although `Extra` field can be used to assign request data, using `Request` field sounds more reasonable.
+		event.Request = sentry.NewRequest(req)
 	}
 
 	fields["runtime.Version"] = runtime.Version()
@@ -165,24 +210,31 @@ func (o Output) Write(fields map[string]interface{}) error {
 
 	stConfig := o.StacktraceConfiguration
 	if stConfig.Enable && level <= stConfig.Level {
+		//
+		event.Extra["stacktrace"] = sentry.NewStacktrace()
+		sentry.NewStacktrace()
+
+		//event.Extra["stacktrace"] = currentStacktrace
 		currentStacktrace := raven.NewStacktrace(stConfig.Skip, stConfig.Context, stConfig.InAppPrefixes)
 		packet.Interfaces = append(packet.Interfaces, currentStacktrace)
 	}
 
-	packet.Extra = map[string]interface{}(fields)
+	event.Extra["fields"] = fields
 
-	_, errCh := o.client.Capture(packet, nil)
+	_ = o.client.CaptureEvent(event, nil, nil)
+	//_, errCh := o.client.Capture(packet, nil)
 
-	timeout := o.Timeout
-	if timeout != 0 {
-		timeoutCh := time.After(timeout)
-		select {
-		case err := <-errCh:
-			return err
-		case <-timeoutCh:
-			return fmt.Errorf("No response from sentry server in %s", timeout)
-		}
-	}
+	defer sentry.Flush(time.Second * 2)
+	//timeout := o.Timeout
+	//if timeout != 0 {
+	//	timeoutCh := time.After(timeout)
+	//	select {
+	//	case err := <-errCh:
+	//		return err
+	//	case <-timeoutCh:
+	//		return fmt.Errorf("No response from sentry server in %s", timeout)
+	//	}
+	//}
 
 	return nil
 }
